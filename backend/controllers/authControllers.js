@@ -1,6 +1,8 @@
+const crypto = require('crypto')
 const asyncHandler = require('express-async-handler')
 const User = require('../models/userModel')
 const ErrorResponse = require('../utils/errorResponse')
+const { sendEMail } = require('../utils/sendMail')
 
 const registerUser = asyncHandler(async (req, res, next) => {
   const { uname, email, password } = req.body
@@ -82,9 +84,50 @@ const forgetPassword = asyncHandler(async (req, res) => {
       <p>Please make a put request to the following link:</p>
       <a href=${resetURL} clicktracking=off>${resetURL}</a>
     `
-  } catch (error) {}
+    try {
+      await sendEMail({
+        to: user.email,
+        subject: 'Reset password Request',
+        text: message,
+      })
+      res.status(200).json({
+        success: true,
+        data: 'Email sent',
+      })
+    } catch (error) {
+      user.resetPasswordToken = undefined
+      user.resetPasswordExpire = undefined
+      await user.save()
+
+      return next(new ErrorResponse('Email could not be sent', 500))
+    }
+  } catch (error) {
+    next(error)
+  }
 })
 
-const resetPassword = asyncHandler(async (req, res) => {})
+const resetPassword = asyncHandler(async (req, res) => {
+  const resetToken = crypto
+    .createHash('sha256')
+    .update(req.params.resetToken)
+    .digest('hex')
+
+  try {
+    const user = await User.findOne({
+      resetPasswordToken: resetToken,
+      resetPasswordExpire: { $gt: Date.now() },
+    })
+    if (!user) return next(new ErrorResponse('Invalid reset Token', 400))
+
+    user.password = req.body.password
+    user.resetPasswordToken = undefined
+    user.resetPasswordExpire = undefined
+    await user.save()
+
+    res.status(200).json({ success: true, data: 'Password reset Success' })
+  } catch (error) {
+    next(error)
+  }
+})
 
 module.exports = { registerUser, authUser, resetPassword, forgetPassword }
